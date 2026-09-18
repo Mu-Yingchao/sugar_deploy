@@ -4,14 +4,20 @@
 来源见各常量旁的注释（文件路径 + 行号），核实方法记录在
 sugar_deploy 仓库 README 的"契约来源"一节。
 
-**关节顺序**：SUGAR 的 29 个受控关节顺序 == G1 URDF
-(`descriptions/robots/g1/g1_29dof_rev_1_0_with_rubber_hand.urdf`) 里
-`type="revolute"` 关节的声明顺序，这个顺序同时也和 `unitree.py` 里定义好没被用上的
-`joint_sdk_names`（面向真机 SDK 的顺序）逐一对上——也就是说仿真里的动作顺序和真机
-SDK 的关节顺序是一致的，不需要做重映射。但这是静态代码分析推出来的，不是从跑起来的
-env 里 print 出来的，第一次接真实 policy/真机之前务必用
-`scripts/dump_joint_order.py` 之类的方式跑一次 `env.scene["robot"].joint_names`
-交叉验证。
+**关节顺序（2026-09-18 已用运行时实测修正过一次，这是当前唯一可信的来源）**：
+最早这里写的是 G1 URDF `<joint type="revolute">` 的声明顺序，当时就标注过"这是静态代码分析
+推出来的，没有运行时验证"——后来跑官方 `inference.sh CarryBox`（GUI 模式）时日志里刚好打出来了
+IsaacLab 实际解析出的动作关节顺序（`isaaclab.envs.mdp.actions.joint_actions` 的
+`Resolved joint names for the action term JointPositionAction` 这一行），**和 URDF 声明顺序完全
+不一样**——不是简单的"先左腿再右腿"分组，是按关节类型（pitch/roll/yaw）分层、左右腿和腰部交替
+穿插的顺序（大概率是 PhysX/USD articulation 按运动学树深度 BFS 遍历产生的，不是文件声明顺序）。
+下面这份就是那次实测确认过的真实顺序。**这也很可能是之前 sim2sim 里机器人一直站不稳、瘫软倒地的
+真正原因**——旧顺序把动作系统性地发到了错误的关节上。
+
+如果以后 SUGAR 仓库升级、换了机器人资产或者 IsaacLab 版本，这个顺序可能会变，出现"训练/推理都正常但
+sim2sim/真机完全不对"的情况时，第一件事就是重新跑一次官方 `inference.sh` 或者
+`env.scene["robot"].joint_names`，把这份列表重新对一遍，不要相信任何"从 URDF/MJCF 文件顺序推断"的
+版本。
 """
 
 from __future__ import annotations
@@ -19,21 +25,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-# 29 个受控关节，顺序来源：
-# SUGAR/descriptions/robots/g1/g1_29dof_rev_1_0_with_rubber_hand.urdf
-# 里 <joint type="revolute"> 的声明顺序（已核对：SONIC_MimicLite/gear_sonic_deploy/
-# g1/g1_29dof.xml 的关节顺序和这个逐一相同，可以直接拿来当 MuJoCo 模型用，
-# 不用像 g1_29dof_with_hand.xml 那样处理手指关节交错的问题）。
+# 29 个受控关节，真实顺序。来源：本机跑 `bash inference.sh CarryBox`（非 headless）时
+# IsaacLab 日志里 `Resolved joint names for the action term JointPositionAction` 那一行，
+# 直接从跑起来的 env 里读出来的，不是猜的，也不是 URDF 声明顺序。
 JOINT_NAMES: tuple[str, ...] = (
-    "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
-    "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
-    "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
-    "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
-    "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
-    "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
-    "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint",
-    "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
-    "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+    "left_hip_pitch_joint", "right_hip_pitch_joint", "waist_yaw_joint",
+    "left_hip_roll_joint", "right_hip_roll_joint", "waist_roll_joint",
+    "left_hip_yaw_joint", "right_hip_yaw_joint", "waist_pitch_joint",
+    "left_knee_joint", "right_knee_joint",
+    "left_shoulder_pitch_joint", "right_shoulder_pitch_joint",
+    "left_ankle_pitch_joint", "right_ankle_pitch_joint",
+    "left_shoulder_roll_joint", "right_shoulder_roll_joint",
+    "left_ankle_roll_joint", "right_ankle_roll_joint",
+    "left_shoulder_yaw_joint", "right_shoulder_yaw_joint",
+    "left_elbow_joint", "right_elbow_joint",
+    "left_wrist_roll_joint", "right_wrist_roll_joint",
+    "left_wrist_pitch_joint", "right_wrist_pitch_joint",
+    "left_wrist_yaw_joint", "right_wrist_yaw_joint",
 )
 NUM_JOINTS = len(JOINT_NAMES)
 assert NUM_JOINTS == 29

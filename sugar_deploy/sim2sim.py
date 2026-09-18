@@ -75,6 +75,18 @@ class SugarSim2Sim:
         self.joint_qvel_adr = np.array([
             self.model.joint(name).dofadr[0] for name in contract.JOINT_NAMES
         ])
+        # 关键：按名字查 actuator id，不能假设 contract.JOINT_NAMES 的顺序和
+        # g1_29dof.xml 里 <actuator> 块的声明顺序一样——已经不一样了（MJCF 是
+        # 文件声明顺序，JOINT_NAMES 现在是 IsaacLab 运行时实测的真实顺序，两者
+        # 不重合）。之前 `d.ctrl[:] = torque` 直接按位置写是错的，扭矩会发到错误
+        # 的关节上，这很可能是之前站不稳的真正原因。
+        self.actuator_ids = np.array([
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+            for name in contract.JOINT_NAMES
+        ])
+        if (self.actuator_ids < 0).any():
+            missing = [n for n, i in zip(contract.JOINT_NAMES, self.actuator_ids) if i < 0]
+            raise ValueError(f"MuJoCo 模型里找不到这些关节对应的 actuator: {missing}")
         # MJCF 默认 armature=0，SUGAR 训练时电机转子惯量（armature）是非零的
         # （见 contract.py，来自 unitree.py 的 ImplicitActuatorCfg），补上去，
         # 否则关节的等效惯量和训练时不一致，动力学响应会偏"轻飘"。
@@ -143,7 +155,7 @@ class SugarSim2Sim:
         effort = np.array(contract.JOINT_EFFORT_LIMIT)
         torque = kp * (q_target - q) - kd * qd
         torque = np.clip(torque, -effort, effort)
-        d.ctrl[:] = torque
+        d.ctrl[self.actuator_ids] = torque
 
     def _maybe_call_generator(self, robot: RobotState) -> None:
         if not self.command_buffer.should_call_generator(self.time_steps):
