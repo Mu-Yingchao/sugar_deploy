@@ -1,19 +1,37 @@
 <mujoco model="sugar_carrybox_scene">
   <!-- G1 29dof（不含手指关节，和 SUGAR 的 URDF 逐一对应，见 sugar_deploy/contract.py 顶部注释）
-       + CarryBox 任务用的箱子。箱子尺寸是占位值（0.28x0.20x0.20m, 1kg，来自
-       SUGAR descriptions/objects/small_box/config.yaml 的 mass_props，尺寸
-       没有对应的真实数值来源，第一版先用合理默认，后续要接近论文精度的话
-       需要从 obj_aligned.usd 量出真实包围盒再替换这里的 size。-->
+       + CarryBox 任务用的箱子。
+
+       箱子尺寸（2026-09-18 已用真实 USD 网格量出，替换掉了之前的占位值）：
+       用 pip 装的轻量 `usd-core`（纯 pxr 库，不需要完整 IsaacSim/Omniverse Kit）直接读
+       SUGAR descriptions/objects/small_box/obj_aligned.usd 里 /obj_aligned/geometry/mesh
+       的顶点包围盒（局部坐标系，Xform 链上没有额外缩放，up axis=Z，meters_per_unit=1.0，
+       可以直接当米用）：
+           size (x,y,z) = (0.4000, 0.5461, 0.5361) m —— 半边长 (0.2000, 0.2730, 0.2681)
+       之前的占位值是 0.28x0.20x0.20m（半边长 0.14/0.10/0.10），比真实箱子在每个维度上都
+       小 1.4~2.7 倍（高度差最多，2.7 倍）——机器人是照着训练时见过的、接近齐腰高的箱子学的
+       弯腰/伸手幅度，摆一个矮小箱子只会让手伸空、弯腰失衡摔倒，这基本可以解释之前"弯腰去
+       够但没抓到，还经常直接摔倒"的现象。mass 保持 1.0kg（来自 config.yaml 的
+       mass_props.mass，这个字段有明确数值，不是猜的），diaginertia 按均匀密度长方体公式
+       I_ii = m/12*(sum of other two full-length^2) 重新算过，替换掉之前没有推导依据的数字。
+
+       箱子初始位置（2026-09-18 同一次排查改的第二处）：直接读了 data/CarryBox/ 下 15 条
+       真实参考轨迹（obj_motion_global_50hz.pkl 的 obj_trans[0] 相对 robot_50hz.npz 的
+       body_pos_w[:,0,:]（pelvis）frame 0），机器人-箱子初始距离全部落在 1.1~2.6m（15 条
+       均值约 1.9m），从没有小于 1m 的样本；之前用的占位距离只有 0.45m（约等于机器人半臂
+       长），是训练分布里完全没出现过的"箱子已经在手边"的场景。这很可能是"机器人一动不动"
+       的真正原因——策略在这种分布外输入下退化成了保守的原地不动，而不是去伸手够一个"不
+       应该已经这么近"的箱子。改成 1.5m（15 条样本区间内、偏保守好走到的一端）。 -->
   <!-- 这个场景文件和 g1_29dof.xml 放在同一目录下，是为了让它自带的
        <compiler meshdir="meshes"/> 能直接解析——meshdir 是相对"当前编译的顶层
        文件"解析的，不是相对 include 进来的那个文件，放不同目录会导致找不到 mesh。 -->
   <include file="g1_29dof.xml"/>
 
   <worldbody>
-    <body name="object" pos="0.45 0 0.5">
+    <body name="object" pos="1.5 0 0.5">
       <freejoint name="object_joint"/>
-      <inertial pos="0 0 0" mass="1.0" diaginertia="0.01 0.012 0.008"/>
-      <geom name="object_geom" type="box" size="0.14 0.10 0.10" rgba="0.75 0.55 0.25 1"
+      <inertial pos="0 0 0" mass="1.0" diaginertia="0.04875 0.03725 0.03817"/>
+      <geom name="object_geom" type="box" size="0.2000 0.2730 0.2681" rgba="0.75 0.55 0.25 1"
             friction="1.0 0.01 0.0001" contype="1" conaffinity="1"/>
     </body>
   </worldbody>
