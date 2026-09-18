@@ -1,0 +1,20 @@
+<mujoco model="sugar_carrybox_scene">
+  <!-- G1 29dof（不含手指关节，和 SUGAR 的 URDF 逐一对应，见 sugar_deploy/contract.py 顶部注释）
+       + CarryBox 任务用的箱子。箱子尺寸是占位值（0.28x0.20x0.20m, 1kg，来自
+       SUGAR descriptions/objects/small_box/config.yaml 的 mass_props，尺寸
+       没有对应的真实数值来源，第一版先用合理默认，后续要接近论文精度的话
+       需要从 obj_aligned.usd 量出真实包围盒再替换这里的 size。-->
+  <!-- 这个场景文件和 g1_29dof.xml 放在同一目录下，是为了让它自带的
+       <compiler meshdir="meshes"/> 能直接解析——meshdir 是相对"当前编译的顶层
+       文件"解析的，不是相对 include 进来的那个文件，放不同目录会导致找不到 mesh。 -->
+  <include file="g1_29dof.xml"/>
+
+  <worldbody>
+    <body name="object" pos="0.45 0 0.5">
+      <freejoint name="object_joint"/>
+      <inertial pos="0 0 0" mass="1.0" diaginertia="0.01 0.012 0.008"/>
+      <geom name="object_geom" type="box" size="0.14 0.10 0.10" rgba="0.75 0.55 0.25 1"
+            friction="1.0 0.01 0.0001" contype="1" conaffinity="1"/>
+    </body>
+  </worldbody>
+</mujoco>
