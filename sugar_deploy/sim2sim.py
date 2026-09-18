@@ -11,6 +11,7 @@ MoCap，见 object_state.py）。
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -106,6 +107,7 @@ class SugarSim2Sim:
         self.stats = SimStats()
         self._target_pos_w: np.ndarray | None = None
         self._target_quat_w = np.array([1.0, 0.0, 0.0, 0.0])
+        self._generator_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
     def reset(self) -> None:
@@ -121,6 +123,7 @@ class SugarSim2Sim:
         self.command_buffer = CommandBuffer()
         self.time_steps = 0
         self.stats = SimStats()
+        self._generator_thread = None
 
         robot = self._read_robot_state()
         self.obs_builder.reset(robot)
@@ -158,8 +161,23 @@ class SugarSim2Sim:
         d.ctrl[self.actuator_ids] = torque
 
     def _maybe_call_generator(self, robot: RobotState) -> None:
+        """异步调用 Generator，不阻塞 50Hz 主循环。
+
+        实测过同步调用的代价：CPU 上单次 ~120~160ms，GPU 上 ~60ms，都远超 20ms 的
+        单步控制预算——同步调用会让机器人每 0.4s（GENERATOR_CALL_INTERVAL 步）卡一下，
+        这不只是 sim2sim 可视化不流畅的问题，真机部署会是真的"机器人每 0.4 秒僵一下"。
+
+        Command chunk 本身设计上就有 36 步的余量（只消费前 20 步，见 CommandBuffer），
+        足够覆盖异步计算的延迟：后台线程算新 chunk 的这段时间里，主循环继续消费旧
+        chunk 剩下的部分，算完了再整体替换，不需要主循环等待。
+        """
         if not self.command_buffer.should_call_generator(self.time_steps):
             return
+        if self._generator_thread is not None and self._generator_thread.is_alive():
+            # 上一次还没算完（正常情况下 <150ms 远小于 400ms 的调用间隔，不该发生；
+            # 真发生了就跳过这次触发，继续用当前 buffer，好过重叠调用或者卡住主循环等它）
+            return
+
         obj_pose = self.object_source.get_pose()
         from sugar_deploy.observation import rotmat_to_quat_wxyz
 
@@ -171,9 +189,14 @@ class SugarSim2Sim:
             target_obj_pos_w=self._target_pos_w if self.generator.use_target else None,
             target_obj_quat_w=self._target_quat_w if self.generator.use_target else None,
         )
-        chunk = self.generator.predict(gen_obs)  # (1, 36, 36)
-        self.command_buffer.set_chunk(chunk[0].cpu().numpy())
-        self.stats.generator_calls += 1
+
+        def _worker() -> None:
+            chunk = self.generator.predict(gen_obs)  # (1, 36, 36)
+            self.command_buffer.set_chunk(chunk[0].cpu().numpy())
+            self.stats.generator_calls += 1
+
+        self._generator_thread = threading.Thread(target=_worker, daemon=True)
+        self._generator_thread.start()
 
     def control_step(self) -> None:
         robot = self._read_robot_state()
@@ -222,6 +245,11 @@ class SugarSim2Sim:
                             time.sleep(dt)
                     if not viewer.is_running():
                         break
+        # Generator 是后台线程异步跑的（见 _maybe_call_generator），进程/脚本结束前
+        # 必须等它跑完，不然作为 daemon 线程会被硬中断，报 C++ 层的 abort
+        # （"terminate called without an active exception"），不是干净退出。
+        if self._generator_thread is not None:
+            self._generator_thread.join(timeout=5.0)
         if self.stats.control_steps > 0:
             self.stats.mean_tracker_step_ms /= self.stats.control_steps
         return self.stats
