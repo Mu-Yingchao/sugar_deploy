@@ -65,20 +65,22 @@ python scripts/run_sim2sim.py --task CarryBox \
     --generator-checkpoint /home/yingchaomu/下载/SUGAR/demo_ckpts/CarryBox/generator.ckpt \
     --validate-only
 
-# headless smoke test（服务器/无显示器）——注意这个命令只用来验证"跑不跑得通"，不代表真实性能：
-# --no-real-time 下主循环尽可能快地跑，CPU 上会出现 GIL 争抢，日志里 generator_calls 会明显低于
-# control_steps/20 的理论值（比如 250 步只有 2 次，不是 12 次左右），这是测试方式本身的问题，不是
-# bug——真实使用（下面这条 GUI 命令，或者 --headless --real-time）里主循环会有 sleep 让出 GIL，
-# 后台线程能正常跑满，见"踩过的坑"第 5 条
+# headless smoke test（服务器/无显示器，checkpoint 路径和上面 --validate-only 那条一样）——注意这
+# 个命令只用来验证"跑不跑得通"，不代表真实性能：--no-real-time 下主循环尽可能快地跑，CPU 上会出现
+# GIL 争抢，日志里 generator_calls 会明显低于 control_steps/20 的理论值（比如 250 步只有 2 次，不是
+# 12 次左右），这是测试方式本身的问题，不是 bug——真实使用（下面这条 GUI 命令，或者
+# --headless --real-time）里主循环会有 sleep 让出 GIL，后台线程能正常跑满，见"踩过的坑"第 5 条
 python scripts/run_sim2sim.py --task CarryBox \
-    --tracker-checkpoint .../tracker.pt --generator-checkpoint .../generator.ckpt \
+    --tracker-checkpoint /home/yingchaomu/下载/SUGAR/demo_ckpts/CarryBox/tracker.pt \
+    --generator-checkpoint /home/yingchaomu/下载/SUGAR/demo_ckpts/CarryBox/generator.ckpt \
     --headless --no-real-time --control-steps 250
 
-# 本机看 MuJoCo 窗口（有 DISPLAY）——正常退出前会先打印 DONE 和正确的统计结果，但关窗口这一步在
-# 这台机器上可能卡死或段错误退出（exit code 139），是显示环境的问题不是仿真结果的问题，
-# 见"踩过的坑"第 7 条；需要干净退出码就用上面的 --headless
+# 本机看 MuJoCo 窗口（有 DISPLAY，checkpoint 路径同上）——正常退出前会先打印 DONE 和正确的统计结果，
+# 但关窗口这一步在这台机器上可能卡死或段错误退出（exit code 139），是显示环境的问题不是仿真结果的
+# 问题，见"踩过的坑"第 7 条；需要干净退出码就用上面的 --headless
 python scripts/run_sim2sim.py --task CarryBox \
-    --tracker-checkpoint .../tracker.pt --generator-checkpoint .../generator.ckpt \
+    --tracker-checkpoint /home/yingchaomu/下载/SUGAR/demo_ckpts/CarryBox/tracker.pt \
+    --generator-checkpoint /home/yingchaomu/下载/SUGAR/demo_ckpts/CarryBox/generator.ckpt \
     --control-steps 1000
 ```
 
