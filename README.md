@@ -17,11 +17,20 @@ sim2sim / 真机部署代码。和 SUGAR 训练仓库分开放（原因见下）
 - ✅ 两个 checkpoint 都能正确加载（见下面"契约怎么核实的"），维度、state_dict key 完全对齐，没有静默出错。
 - ✅ 整条数据流（机器人本体历史观测、anchor 系物体位姿变换、Generator 低频出 command、Tracker 高频消费 command）跑得通，形状全部核实过。
 - ✅ 物理不再发散（见下面"踩过的坑"），扭矩量级合理（几到几十牛米，在电机 effort limit 以内）。
-- ✅ **机器人站稳了**：3 秒仿真（150 控制步）`pelvis_z` 稳定维持在 0.78~0.79，不再瘫软倒地。之前一直
-  摔倒的根因是**关节顺序错了**——`contract.py` 里原来按 URDF 文件声明顺序推断的关节顺序，和 IsaacLab
-  运行时真实用的顺序完全不一样（2026-09-18 用官方 `inference.sh` 的日志实测确认并修正，见"踩过的坑"）。
-- ⚠️ **箱子没被稳定抓住**：箱子会从初始高度掉到地上（`carrybox_scene.xml` 里的箱子尺寸/位置是占位值，
-  没有真实来源），机器人站稳之后这是当前最主要的待排查项，见"已知问题 / 下一步排查"。
+- ✅ **机器人站稳了**：`pelvis_z` 全程稳定维持在 0.76~0.80，不再瘫软倒地。之前一直摔倒的根因是**关节
+  顺序错了**——`contract.py` 里原来按 URDF 文件声明顺序推断的关节顺序，和 IsaacLab 运行时真实用的顺序
+  完全不一样（2026-09-18 用官方 `inference.sh` 的日志实测确认并修正，见"踩过的坑"第 4 条）。
+- ✅ **Generator 调用不再卡顿**：改成后台线程异步调用后，50Hz 真实节拍下每步耗时稳定在预算内（见"踩过
+  的坑"第 5 条），CPU/GPU 都不需要额外配置。
+- ✅ **机器人会真的走过去伸手**：`carrybox_scene.xml` 里箱子的尺寸和初始距离原来都是没有依据的占位值，
+  跟真实箱子模型/真实训练数据的分布差得远，机器人因此要么伸空手摔倒、要么直接原地不动（见"踩过的坑"第
+  6 条）。用真实 USD 网格和真实参考轨迹重新校准后，600 步（12 秒）实测机器人会从起点走到箱子旁边、
+  站稳不摔、手伸到箱子可触及范围内并发生接触。
+- ⚠️ **还没稳定抓住搬到目标点**：箱子会被碰到、轻微顶起，但没有观察到稳定抓住并搬运到终点的连贯动作，
+  当前最主要的待排查项，怀疑方向见"已知问题 / 下一步排查"。
+- ⚠️ **GUI viewer 模式退出不干净**（见"踩过的坑"第 7 条）：仿真本身跑完、结果正确，但关闭 MuJoCo
+  viewer 窗口时这台机器上偶发卡死或段错误，是这台机器的显示环境问题，不影响仿真结果本身；需要干净
+  退出码的场景（比如脚本化调用）用 `--headless` 模式。
 
 ## 契约怎么核实的（为什么这些数字可信）
 
@@ -56,24 +65,37 @@ python scripts/run_sim2sim.py --task CarryBox \
     --generator-checkpoint /home/yingchaomu/下载/SUGAR/demo_ckpts/CarryBox/generator.ckpt \
     --validate-only
 
-# headless smoke test（服务器/无显示器）
+# headless smoke test（服务器/无显示器）——注意这个命令只用来验证"跑不跑得通"，不代表真实性能：
+# --no-real-time 下主循环尽可能快地跑，CPU 上会出现 GIL 争抢，日志里 generator_calls 会明显低于
+# control_steps/20 的理论值（比如 250 步只有 2 次，不是 12 次左右），这是测试方式本身的问题，不是
+# bug——真实使用（下面这条 GUI 命令，或者 --headless --real-time）里主循环会有 sleep 让出 GIL，
+# 后台线程能正常跑满，见"踩过的坑"第 5 条
 python scripts/run_sim2sim.py --task CarryBox \
     --tracker-checkpoint .../tracker.pt --generator-checkpoint .../generator.ckpt \
     --headless --no-real-time --control-steps 250
 
-# 本机看 MuJoCo 窗口（有 DISPLAY）
+# 本机看 MuJoCo 窗口（有 DISPLAY）——正常退出前会先打印 DONE 和正确的统计结果，但关窗口这一步在
+# 这台机器上可能卡死或段错误退出（exit code 139），是显示环境的问题不是仿真结果的问题，
+# 见"踩过的坑"第 7 条；需要干净退出码就用上面的 --headless
 python scripts/run_sim2sim.py --task CarryBox \
     --tracker-checkpoint .../tracker.pt --generator-checkpoint .../generator.ckpt \
     --control-steps 1000
 ```
 
-拿我们自己训出来的 checkpoint 跑（等服务器上对应任务训完 Generator 之后）：
+拿我们自己训出来的 checkpoint 跑（等服务器上对应任务训完 Tracker + Generator 之后，`ckpts/` 目录
+会出现和 `demo_ckpts/<Task>/` 一样命名的 `tracker.pt` + `generator.ckpt`）：
 
 ```bash
 python scripts/run_sim2sim.py --task CarryBox \
     --tracker-checkpoint /data0/SUGAR_repro/SUGAR/outputs/CarryBox_server_repro/ckpts/tracker.pt \
     --generator-checkpoint /data0/SUGAR_repro/SUGAR/outputs/CarryBox_server_repro/ckpts/generator.ckpt
 ```
+
+**核实过路径格式是对的，但截至 2026-09-18 六个任务没有一个训完，这条命令目前对任何任务都还跑不了**
+（SSH 到服务器 `ls /data0/SUGAR_repro/SUGAR/outputs/<Task>_server_repro/ckpts/` 确认过，全部是空
+目录）——CarryBox/PushBox/PickBottle/SitChair 还在 Refiner 阶段；KickBox/StandBottle 已经训完
+Refiner、进入 Tracker 阶段（`logs/` 下能看到 `tracker/` 目录和 `refiner.pt`），但都还没到 Generator
+阶段。跑之前先用上面这条 `ls` 命令确认 `ckpts/` 里已经有文件，再替换 `--task` 和路径里的任务名。
 
 ## 目录结构
 
@@ -144,6 +166,24 @@ assets/g1/
    把排查方向带偏——这里真机部署也会踩同一个坑（真机上没有"viewer 卡不卡"这种直观信号，只会表现成
    机器人动作一顿一顿，更难发现是这个原因），async 化对真机部署同样是必要的，不只是仿真可视化的
    优化。
+
+6. **（2026-09-18）场景里箱子的尺寸和初始距离都是没有依据的占位值，导致"机器人不动"或"伸空手摔倒"**——
+   详细排查过程、真实数值怎么量出来的、实测前后对比，见下面"已知问题 / 下一步排查"第 1、2 条，这里
+   不重复。教训是一样的：**任何"占位场景参数"只要仓库里有真实数据/真实资产可以核对，就不要长期停留在
+   占位状态**——`descriptions/objects/*/obj_aligned.usd` 和 `data/<Task>/` 这两类真实资产/真实轨迹
+   数据其实从一开始就在仓库里，没有及时去读是这个坑拖了一段时间的原因。
+
+7. **GUI viewer 模式下，关闭 MuJoCo 窗口时进程偶发卡死或段错误（SIGSEGV, exit code 139）**——
+   用 `scripts/run_sim2sim.py`（不带 `--headless`）跑完之后，终端会先正确打印
+   `[sugar_deploy] DONE ...`，说明仿真本身和统计结果都是对的，但进程在退出 `mujoco.viewer.launch_
+   passive` 的 `with` 块之后没有干净退出。排查过是不是我们自己加的后台线程（`_maybe_call_generator`
+   异步调用）导致的：写了一个完全不含 sugar_deploy 代码、纯 MuJoCo 的最小复现（建模型、开 passive
+   viewer、跑 50 步、退出 `with` 块），同样卡住不退出——说明**这是这台机器的显示环境（`DISPLAY=:1`，
+   非原生 X，具体是哪种远程/虚拟显示服务还没查）和 MuJoCo GLFW 窗口销毁交互的问题，不是我们的异步线程
+   改动引入的**，和之前"IsaacSim 窗口关不掉需要强制退出"大概率是同一类问题的不同表现。**不影响仿真
+   结果的正确性**，只影响进程能不能干净退出：需要干净退出码的场景（脚本化调用、CI）用 `--headless`；
+   交互查看仍然用 GUI viewer，但要接受它可能需要手动 `kill` 收尾，这个问题本身还没有根因定位到具体是
+   GLFW/驱动的哪一层，留作后续。
 
 ## 已知问题 / 下一步排查
 
