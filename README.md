@@ -3,6 +3,10 @@
 [SUGAR](https://github.com/tianshuwu/SUGAR)（Command Tracker + Command Generator 两级策略）的 MuJoCo
 sim2sim / 真机部署代码。和 SUGAR 训练仓库分开放（原因见下），不依赖 IsaacSim/IsaacLab 跑起来。
 
+相关文档：
+- [`APRILTAG_DEPLOYMENT.md`](./APRILTAG_DEPLOYMENT.md)：AprilTag 物体感知方案（原理、sim 内验证结果、真机标定步骤、已知限制）
+- [`REAL_HARDWARE_DEPLOYMENT.md`](./REAL_HARDWARE_DEPLOYMENT.md)：真机 DDS 通信层 + 分阶段上机安全测试流程
+
 ## 为什么单独一个仓库，不塞进 SUGAR 训练仓库
 
 - 训练依赖 IsaacSim（重、GPU 专用）；部署只需要 `torch` + `mujoco`（轻，CPU 就能跑，未来真机上更是不能依赖 IsaacSim）。
@@ -108,6 +112,8 @@ sugar_deploy/
                    MocapObjectSource（真机 MoCap 占位）/ AprilTagObjectSource（AprilTag 视觉方案）
   camera_source.py CameraSource 接口：MujocoCameraSource（sim 渲染）/ RealSenseCameraSource（真机，未测）
   apriltag_sim_calibration.py  carrybox_scene_apriltag.xml 专用的 tag 偏移标定常量
+  unitree_joint_map.py  contract.JOINT_NAMES ↔ 真机 DDS 电机数组顺序的映射（未在真机核对过）
+  real_robot_io.py      G1 真机 rt/lowstate 订阅 / rt/lowcmd 发布（未在真机测过，见 REAL_HARDWARE_DEPLOYMENT.md）
   observation.py   历史 buffer、anchor 坐标变换、6D 旋转表示、command buffer
   sim2sim.py       主循环：50Hz Tracker / 每 20 步一次 Generator，PD 力矩控制
 scripts/
@@ -280,9 +286,10 @@ Generator 长期停留在训练时从没见过的输入区域，它没有"识别
 - AprilTag 方案真机部分：`RealSenseCameraSource` 没在真实硬件测过、相机外参/tag 偏移标定
   没做、近场视野盲区没有手腕相机可以覆盖——完整步骤见 `APRILTAG_DEPLOYMENT.md` 第 6~7 节。
 - `MocapObjectSource` 只有接口，没接任何真实 MoCap 协议。
-- 真机侧的 DDS/Unitree SDK 通信完全没写，目前只有 MuJoCo sim2sim。真机开始接的时候计划
-  参考 HDMI 的 [`EGalahad/sim2real`](https://github.com/EGalahad/sim2real)（训练框架仍然
-  是 SUGAR，只是部署这一层的 DDS/ZMQ/多种 I/O 模式代码可以借鉴，见下面 SUGAR vs HDMI 的评估）。
+- 真机侧的 DDS/Unitree SDK 通信：`unitree_joint_map.py`/`real_robot_io.py` 已经照着 HDMI
+  的 `EGalahad/sim2real` 写了基础的读写层，但**完全没在真实硬件上跑过**，分阶段上机测试
+  流程见 [`REAL_HARDWARE_DEPLOYMENT.md`](./REAL_HARDWARE_DEPLOYMENT.md)——目前只到"能安全
+  发指令"这一层，Tracker/Generator 接入真机闭环还没做。
 
 ## SUGAR vs HDMI：部署路线的选择
 

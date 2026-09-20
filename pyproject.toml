@@ -20,6 +20,13 @@ dependencies = [
 realsense = [
     "pyrealsense2",
 ]
+# 真机低层控制用（real_robot_io.py）；装之前先看 REAL_HARDWARE_DEPLOYMENT.md 的 FAQ——
+# unitree_sdk2py 依赖编译好的 cyclonedds，直接 pip install 大概率会因为找不到
+# CYCLONEDDS_HOME 失败，需要先手动编译一遍 cyclonedds。同样是可选依赖，不该影响 sim2sim
+# 主链路。
+unitree = [
+    "unitree_sdk2py @ git+https://github.com/unitreerobotics/unitree_sdk2_python.git",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
