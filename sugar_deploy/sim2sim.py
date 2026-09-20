@@ -15,6 +15,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import mujoco
 import numpy as np
@@ -53,6 +54,16 @@ class SugarSim2Sim:
     """use_target=True 时，物体目标位置 = 初始物体位置 + 这个偏移（世界系）。
     第一版没有真实任务目标位置来源，先用一个占位偏移，行为上大概率不对，
     只用于验证"策略在跑、command chunk 会响应目标变化"，不代表复现论文精度。"""
+    object_source_override: ObjectStateSource | None = None
+    """不传就用 __post_init__ 里默认建的 MujocoGroundTruthSource（sim2sim 自验证用）；
+    传了就用调用方给的这个实例——用来在不碰这个类主体逻辑的前提下换成
+    AprilTagObjectSource/MocapObjectSource 等真实感知方案，见 scripts/run_sim2sim.py
+    的 --object-source 开关。"""
+    pre_step_hook: Callable[[], None] | None = None
+    """每个控制步最开始（读 obj pose 之前）会调用一次的可选回调，不接受参数、不要返回值。
+    设计出来专门给"用 AprilTag 视觉感知"这种需要每步先做一次'相机现在在哪+检测更新'的
+    object_source 用（见 run_sim2sim.py），MujocoGroundTruthSource/MocapObjectSource
+    不需要这个，留 None 就行。"""
 
     model: mujoco.MjModel = field(init=False)
     data: mujoco.MjData = field(init=False)
@@ -68,7 +79,9 @@ class SugarSim2Sim:
         # 换成 implicitfast 积分器（MuJoCo 内部对关节阻尼项做隐式处理）解决。
         self.model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
         self.data = mujoco.MjData(self.model)
-        self.object_source = MujocoGroundTruthSource(self.model, self.data, self.task.object_body_name)
+        self.object_source = self.object_source_override or MujocoGroundTruthSource(
+            self.model, self.data, self.task.object_body_name
+        )
 
         self.joint_qpos_adr = np.array([
             self.model.joint(name).qposadr[0] for name in contract.JOINT_NAMES
@@ -128,6 +141,11 @@ class SugarSim2Sim:
         robot = self._read_robot_state()
         self.obs_builder.reset(robot)
 
+        # AprilTagObjectSource 这类"主动检测型" object_source 在第一次 get_pose() 之前
+        # 必须先跑过至少一次 update()，否则会直接抛异常（见 object_state.py）——
+        # pre_step_hook 就是干这个的，reset() 里也要调一次，不能只在 control_step() 里调。
+        if self.pre_step_hook is not None:
+            self.pre_step_hook()
         obj_pose = self.object_source.get_pose()
         self._target_pos_w = obj_pose.pos_w + self.target_offset_w
         self._target_quat_w = np.array([1.0, 0.0, 0.0, 0.0])
@@ -199,6 +217,8 @@ class SugarSim2Sim:
         self._generator_thread.start()
 
     def control_step(self) -> None:
+        if self.pre_step_hook is not None:
+            self.pre_step_hook()
         robot = self._read_robot_state()
         self._maybe_call_generator(robot)
         command = self.command_buffer.current()

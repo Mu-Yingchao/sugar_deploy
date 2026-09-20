@@ -93,11 +93,10 @@ python scripts/run_sim2sim.py --task CarryBox \
     --generator-checkpoint /data0/SUGAR_repro/SUGAR/outputs/CarryBox_server_repro/ckpts/generator.ckpt
 ```
 
-**核实过路径格式是对的，但截至 2026-09-18 六个任务没有一个训完，这条命令目前对任何任务都还跑不了**
-（SSH 到服务器 `ls /data0/SUGAR_repro/SUGAR/outputs/<Task>_server_repro/ckpts/` 确认过，全部是空
-目录）——CarryBox/PushBox/PickBottle/SitChair 还在 Refiner 阶段；KickBox/StandBottle 已经训完
-Refiner、进入 Tracker 阶段（`logs/` 下能看到 `tracker/` 目录和 `refiner.pt`），但都还没到 Generator
-阶段。跑之前先用上面这条 `ls` 命令确认 `ckpts/` 里已经有文件，再替换 `--task` 和路径里的任务名。
+**（2026-09-20 更新）六个任务已经全部训完**——SSH 到服务器确认过，`CarryBox/PushBox/
+KickBox/PickBottle/StandBottle/SitChair` 的 `ckpts/` 目录现在都有完整的
+`refiner.pt`+`tracker.pt`+`generator.ckpt`，GPU 全部空闲，没有任务还在跑。上面这条命令
+现在对所有任务都能跑，把 `--task` 和路径里的任务名换成想跑的那个就行。
 
 ## 目录结构
 
@@ -105,18 +104,28 @@ Refiner、进入 Tracker 阶段（`logs/` 下能看到 `tracker/` 目录和 `ref
 sugar_deploy/
   contract.py      关节顺序/PD增益/action_scale/观测布局等硬常量，全部标注了代码来源
   policy.py        TrackerPolicy（rsl_rl ActorCritic）+ GeneratorPolicy（复用 GeneratorWrapper）
-  object_state.py  ObjectStateSource 接口：MujocoGroundTruthSource（sim2sim 自验证）/ MocapObjectSource（真机占位）
+  object_state.py  ObjectStateSource 接口：MujocoGroundTruthSource（sim2sim 自验证）/
+                   MocapObjectSource（真机 MoCap 占位）/ AprilTagObjectSource（AprilTag 视觉方案）
+  camera_source.py CameraSource 接口：MujocoCameraSource（sim 渲染）/ RealSenseCameraSource（真机，未测）
+  apriltag_sim_calibration.py  carrybox_scene_apriltag.xml 专用的 tag 偏移标定常量
   observation.py   历史 buffer、anchor 坐标变换、6D 旋转表示、command buffer
   sim2sim.py       主循环：50Hz Tracker / 每 20 步一次 Generator，PD 力矩控制
 scripts/
-  run_sim2sim.py   tyro CLI 入口
+  run_sim2sim.py               tyro CLI 入口，--object-source {ground_truth,apriltag}
+  test_apriltag_perception.py  AprilTag 精度验证（影子模式，见 APRILTAG_DEPLOYMENT.md）
+  calibrate_apriltag_offsets.py  在 sim 里标定 tag 相对物体的偏移
 assets/g1/
   g1_29dof.xml     G1 29dof MuJoCo 模型，复用自 SONIC_MimicLite/gear_sonic_deploy/g1/
                    （29 个关节名字和 SUGAR 的 URDF 逐一对应，但顺序不代表 contract.JOINT_NAMES
                    的顺序——MJCF/URDF 是文件声明顺序，JOINT_NAMES 是 IsaacLab 运行时实测的真实
-                   顺序，两者不一样，sim2sim.py 里都是按名字查 id，不依赖顺序对齐，见"踩过的坑"）
-  carrybox_scene.xml  G1 + CarryBox 箱子的组合场景，目前只有这一个任务配好
+                   顺序，两者不一样，sim2sim.py 里都是按名字查 id，不依赖顺序对齐，见"踩过的坑"；
+                   额外加了一个 chest_cam 相机，挂载在 torso_link 上，AprilTag 感知用）
+  carrybox_scene.xml           G1 + CarryBox 箱子，ground_truth 感知用
+  carrybox_scene_apriltag.xml  同上 + 箱子贴了 3 张 AprilTag，AprilTag 感知验证用
+  textures/tag36h11_{0,1,2}.png  贴图素材，来自 AprilRobotics/apriltag-imgs
 ```
+
+AprilTag 方案的详细原理、真机标定步骤、已知限制见 [`APRILTAG_DEPLOYMENT.md`](./APRILTAG_DEPLOYMENT.md)。
 
 ## 踩过的坑
 
@@ -255,23 +264,38 @@ Generator 长期停留在训练时从没见过的输入区域，它没有"识别
 `ObjectStateSource`（`object_state.py`）是特意做成可插拔接口的，换下面哪个方案，`observation.py`/
 `sim2sim.py` 都不用改，只要新写一个 `ObjectStateSource` 子类。按投入产出比从低到高排：
 
-| 档位 | 方案 | 需要什么 | 精度/鲁棒性 | 预计工作量（做出"能跑的第一版"，不是打磨完善） |
+| 档位 | 方案 | 需要什么 | 精度/鲁棒性 | 状态 |
 |---|---|---|---|---|
-| 0 | **固定预设坐标**（人工每次把箱子摆在量好的同一个位置，代码里写死这个坐标，训练/测试全程不再更新） | 一把尺子 | 极差：不是真感知，物体挪一下位置就全错，交互过程中"抓没抓住"这类闭环判断完全失效 | 几分钟。**只建议当成排查"是不是物体感知的问题"的对照实验用，不建议当成真实部署方案** |
-| 1 | **AprilTag/ArUco 标签 + G1 自带的 D435 深度相机** | 打印标签贴物体上，`opencv-python` 的 `cv2.aruco` 模块（或 `apriltag` 库），相机内参（D435 出厂自带或 `realsense-viewer` 读）+ 外参（URDF `d435_joint` 的挂载位置可以当起点，更准可以做一次简单的手眼标定） | 刚体、已知标签尺寸时可以做到毫米级位置精度；被完全遮挡时会丢失，标签本身如果被手挡住会失效 | **1~3 天**：半天到 1 天先用一个独立脚本验证"D435 拿到 RGB 图 → 检测到标签 → 解出 6D pose"能跑通；半天做相机系到机器人系的坐标变换；半天到 1 天接进 `ObjectStateSource` 子类并在 sim2sim/真机上联调。这是**最快能拿到一个可用方案**的路径 |
-| 1.5 | **无标签但用深度做简单形状拟合**（比如用色彩/深度分割把箱子从背景里抠出来，拿点云去拟合一个长方体/圆柱体求位姿） | D435 深度流 + 简单点云处理（`open3d` 之类） | 比标签方案更脆弱（依赖背景干净、物体和背景有区分度），但不用在物体上贴东西 | **3~7 天**，比标签方案多一层"稳定分割"要调 |
-| 2 | **在线跑 FoundationPose**（SUGAR 论文 Stage 1 离线处理视频用的同一个工具，改成实时吃 D435 的 RGB-D 流） | FoundationPose 本身的运行环境（需要 GPU）、`descriptions/objects/*/obj_aligned.usd` 这几个物体已经有的 mesh 可以直接喂给它 | 无需贴标签、理论精度可以很高，但**遮挡下的跟踪丢失/漂移是真实风险**——搬箱子这个任务手本身就经常挡住箱子，这大概率正是论文选择用 MoCap 而不是在线视觉的原因 | **1~2 周**：不只是"跑起来"，还要处理实时性（能不能追上控制频率）、跟踪丢失后怎么重新初始化，工作量明显比标签方案大 |
-| 3 | **真动作捕捉系统**（Vicon/OptiTrack 等） | 多摄像头动捕硬件、场地标定 | 论文原始方案，精度和鲁棒性最好 | 如果买现成商用系统：硬件到位后标定安装大概几天到一两周，但**采购成本高**（通常几万到几十万人民币起）；如果想着自己拼一套低成本动捕（比如多个普通摄像头三角化），那是一个独立的、相当有难度的工程项目，不建议为了"物体感知"这一个子问题单独去做 |
-
-**建议**：先做档位 0（固定坐标）配合先解决"机器人站不稳"那个更基础的问题，验证清楚 sim2sim 这条链路
-本身没问题之后，直接上**档位 1（AprilTag）**——这是性价比最高的选择，大概率就是几天的工作量，能让你
-真正拿到一版"喂真实变化的物体位置"的可用系统，档位 2（FoundationPose）可以作为后续摆脱标签的技术
-升级方向，不建议一开始就啃。
+| 0 | **固定预设坐标**（人工每次把箱子摆在量好的同一个位置，代码里写死这个坐标，训练/测试全程不再更新） | 一把尺子 | 极差：不是真感知，物体挪一下位置就全错，交互过程中"抓没抓住"这类闭环判断完全失效 | 只建议当排查用的对照实验，不建议当真实部署方案 |
+| 1 | **AprilTag 标签 + RealSense 相机** | 打印标签贴物体上，`pupil_apriltags`，相机内参+外参标定 | 检测到时毫米级位置精度、~1° 姿态精度（sim 里实测），**但固定倾角相机有近场视野盲区**（见下） | **已选定并实现，sim 内已验证**，详细方案/步骤/已知限制见 [`APRILTAG_DEPLOYMENT.md`](./APRILTAG_DEPLOYMENT.md)，真机 RealSense 接入还没测过 |
+| 1.5 | **无标签但用深度做简单形状拟合** | D435 深度流 + 简单点云处理（`open3d` 之类） | 比标签方案更脆弱，但不用在物体上贴东西 | 未实现，不再是当前方向 |
+| 2 | **在线跑 FoundationPose** | GPU、`descriptions/objects/*/obj_aligned.usd` mesh | 无需贴标签，但遮挡下跟踪丢失/漂移是真实风险 | 未实现，不再是当前方向 |
+| 3 | **真动作捕捉系统**（Vicon/OptiTrack） | 多摄像头动捕硬件、场地标定 | 论文原始方案，精度和鲁棒性最好，但采购成本高 | 未实现，SUGAR/HDMI 官方真机都是这个方案 |
 
 ## 还没做的
 
 - 只有 CarryBox 的 MuJoCo 场景，其余五个任务（KickBox/PushBox/PickBottle/StandBottle/SitChair）
-  需要照着 `assets/g1/carrybox_scene.xml` 配对应形状的物体（`descriptions/objects/{big_box,bottle,chair}/`）。
-- `MocapObjectSource` 只有接口，没接任何真实 MoCap 协议——真机部署前必须先接好。
-- 真机侧的 DDS/Unitree SDK 通信完全没写，目前只有 MuJoCo sim2sim。真机开始接的时候建议参考
-  `SONIC_MimicLite/gear_sonic_deploy` 里 `deploy.sh sim|real|<interface>` 的模式。
+  需要照着 `assets/g1/carrybox_scene.xml`（或 `carrybox_scene_apriltag.xml`）配对应形状的物体
+  （`descriptions/objects/{big_box,bottle,chair}/`）。
+- AprilTag 方案真机部分：`RealSenseCameraSource` 没在真实硬件测过、相机外参/tag 偏移标定
+  没做、近场视野盲区没有手腕相机可以覆盖——完整步骤见 `APRILTAG_DEPLOYMENT.md` 第 6~7 节。
+- `MocapObjectSource` 只有接口，没接任何真实 MoCap 协议。
+- 真机侧的 DDS/Unitree SDK 通信完全没写，目前只有 MuJoCo sim2sim。真机开始接的时候计划
+  参考 HDMI 的 [`EGalahad/sim2real`](https://github.com/EGalahad/sim2real)（训练框架仍然
+  是 SUGAR，只是部署这一层的 DDS/ZMQ/多种 I/O 模式代码可以借鉴，见下面 SUGAR vs HDMI 的评估）。
+
+## SUGAR vs HDMI：部署路线的选择
+
+评估过是否放弃 SUGAR 改用 [HDMI](https://github.com/LeCAR-Lab/HDMI)（同类人形全身
+loco-manipulation 工作，从人类视频学习），结论是**继续用 SUGAR，真机部署阶段参考 HDMI 的
+部署代码（`EGalahad/sim2real`），不整体切换训练框架**：
+
+- **物体感知不是切换的理由**：查过 HDMI 官方部署仓库源码，真机同样用外部 Vicon 动捕
+  （`scripts/publishers/vicon_pose_publisher.py`），不是 AprilTag——两边这块工作量完全一样。
+- **HDMI 部署代码更成熟**：`EGalahad/sim2real` 有真实 Unitree DDS SDK 桥接、ONNX/TensorRT
+  推理后端、现成可下载的多任务 checkpoint，明显比 SUGAR 官方（真机部署代码是空的，这个仓库
+  从零搭）成熟，但这解决的是"真机通信怎么接"这个我们还没碰到的问题，不是当前卡住的问题
+  （抓取精度、AprilTag 感知，两边工作量一样）。
+- **切换成本是实的**：HDMI 需要 IsaacSim 4.5.0/IsaacLab v2.2.0，和已经装好在跑的
+  5.1.0/v2.3.0 不是一个版本；服务器 6 个任务已经训完（见上面"现状"）；`sugar_deploy` 已经从
+  "完全不动"修到"走过去伸手摸到箱子+AprilTag 感知闭环跑通"，是在往前推进，不是卡死。

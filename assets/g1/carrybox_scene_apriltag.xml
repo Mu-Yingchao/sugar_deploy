@@ -1,0 +1,52 @@
+<mujoco model="sugar_carrybox_scene_apriltag">
+  <!-- carrybox_scene.xml 的 AprilTag 版本：同一个箱子（尺寸/初始位置/质量的来源和取值都和
+       carrybox_scene.xml 完全一致，不重复注释，见那个文件），额外贴了 3 张 AprilTag
+       （tag36h11 family，id 0/1/2，来自 AprilRobotics/apriltag-imgs），分别贴在箱子朝向
+       机器人初始站位一侧的 3 个面（前/上/侧），加了一个模拟胸前相机的 <camera>（定义在
+       g1_29dof.xml 的 torso_link 里，名字 "chest_cam"）。
+
+       这个场景只用于验证 sugar_deploy/object_state.py 的 AprilTagObjectSource +
+       camera_source.py 的检测/位姿解算代码本身对不对（渲染出来的图喂给
+       pupil_apriltags，解出来的物体位姿和 MujocoGroundTruthSource 的真值比对误差），
+       不是真机场景——真机上箱子不会自带 MuJoCo 材质，需要真的把这 3 张图打印出来贴上去。
+
+       多贴 3 个面是为了在 sim 里就能验证"任意一个可见 tag 都能独立解出物体位姿"这件事，
+       不是说真实部署一定要贴 3 个——真实贴几个、贴哪几个面取决于机器人靠近箱子的方式，
+       见部署文档。 -->
+  <include file="g1_29dof.xml"/>
+
+  <asset>
+    <texture type="2d" name="tag0_tex" file="textures/tag36h11_0.png"/>
+    <material name="tag0_mat" texture="tag0_tex" specular="0" shininess="0"/>
+    <texture type="2d" name="tag1_tex" file="textures/tag36h11_1.png"/>
+    <material name="tag1_mat" texture="tag1_tex" specular="0" shininess="0"/>
+    <texture type="2d" name="tag2_tex" file="textures/tag36h11_2.png"/>
+    <material name="tag2_mat" texture="tag2_tex" specular="0" shininess="0"/>
+  </asset>
+
+  <worldbody>
+    <body name="object" pos="1.5 0 0.5">
+      <freejoint name="object_joint"/>
+      <inertial pos="0 0 0" mass="1.0" diaginertia="0.04875 0.03725 0.03817"/>
+      <geom name="object_geom" type="box" size="0.2000 0.2730 0.2681" rgba="0.75 0.55 0.25 1"
+            friction="1.0 0.01 0.0001" contype="1" conaffinity="1"/>
+
+      <!-- tag 贴片本身不参与碰撞/不算质量（contype/conaffinity=0, mass 由上面 inertial 单独
+           给了，避免几何叠加影响箱子动力学），只是贴在箱子表面的一层薄板，位置比箱面往外
+           偏移 0.5mm 防止和箱体表面 z-fighting。tag 本体边长 0.15m（对应贴图里白边内的
+           实际图案区域），要和 AprilTagObjectSource 构造时传的 tag_size_m 一致，改一处要
+           两处一起改。
+
+           朝向用 zaxis 直接指定"tag 表面法线在箱子局部系下指向哪"，不用 euler 手算角度：
+           - id 0：贴在朝向机器人初始站位的前面（法线 -x，机器人从 x=0 走向箱子 x=1.5）
+           - id 1：贴在顶面（法线 +z），机器人走近后低头也能看到
+           - id 2：贴在一侧（法线 +y），验证"任意可见面都能独立解出位姿"这件事 -->
+      <geom name="tag0_geom" type="box" size="0.075 0.075 0.0005" pos="-0.2005 0 0"
+            zaxis="-1 0 0" material="tag0_mat" contype="0" conaffinity="0" mass="0"/>
+      <geom name="tag1_geom" type="box" size="0.075 0.075 0.0005" pos="0 0 0.2686"
+            zaxis="0 0 1" material="tag1_mat" contype="0" conaffinity="0" mass="0"/>
+      <geom name="tag2_geom" type="box" size="0.075 0.075 0.0005" pos="0 0.2735 0"
+            zaxis="0 1 0" material="tag2_mat" contype="0" conaffinity="0" mass="0"/>
+    </body>
+  </worldbody>
+</mujoco>

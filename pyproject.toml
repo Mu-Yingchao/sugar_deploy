@@ -8,6 +8,17 @@ dependencies = [
     "tyro>=0.8.0",
     "numpy",
     "torch",
+    "pupil-apriltags>=1.0.4",
+    "pillow",
+]
+
+[project.optional-dependencies]
+# 真机 RealSense 相机用；sim2sim 里 MujocoCameraSource 不需要这个，
+# 只有跑 AprilTagObjectSource + RealSenseCameraSource（真机）才要装。
+# 单独拆出来是因为 pyrealsense2 依赖真实相机 SDK，在没有相机的开发机/CI 上装了也用不了，
+# 不装也不该影响 sim2sim 这条主链路能不能跑起来。
+realsense = [
+    "pyrealsense2",
 ]
 
 [build-system]
