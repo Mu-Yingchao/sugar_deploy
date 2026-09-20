@@ -27,43 +27,123 @@ sim2sim 里关节顺序错了，后果是机器人在虚拟世界里瘫倒，重
 | Tracker/Generator 接入真机闭环 | ⚪ 未实现，等第 0~3 阶段都过了再做 |
 | AprilTag 相机外参/tag 偏移真机标定 | ⚪ 未做，方法见 `APRILTAG_DEPLOYMENT.md` 第 6.3/6.4 节，要等机器人能稳定站/走之后再做意义更大 |
 
-## 1. 前置确认
+## 1. 阶段 0 完整逐步指导（唯一不需要任何物理防护的一步，从这里开始）
 
-1. **网络接口**：找到你的开发机（或者机载电脑）和机器人通信用的网口名字，`ip a` 看一下，
-   通常是 `eth0`，不一定，确认好传给下面脚本的 `--interface`。
-2. **确认机型**：`unitree_joint_map.py`/`real_robot_io.py` 目前只支持 **G1 29dof**
-   （`unitree_hg` 消息族）——如果你的 G1 是别的关节数配置，`UNITREE_JOINT_NAMES` 这份列表
-   要重新核对，不能直接用。
-3. **装 SDK**（在能连到机器人网络的那台机器上）：
-   ```bash
-   pip install -e ".[unitree]"
-   ```
-   大概率会卡在编译 `cyclonedds` 这一步（`Could not locate cyclonedds`），需要先手动编译：
-   ```bash
-   git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x
-   cd cyclonedds && mkdir build install && cd build
-   cmake .. -DCMAKE_INSTALL_PREFIX=../install
-   cmake --build . --target install
-   export CYCLONEDDS_HOME="$(pwd)/../install"
-   ```
-   然后重新跑 `pip install -e ".[unitree]"`。这个 FAQ 来源同样是 HDMI 部署仓库。
+### 1.1 在哪台机器上跑
 
-## 2. 上机测试：分阶段流程
+这一步需要在**能直接收到机器人 DDS 广播**的机器上跑，不是随便哪台能上网的电脑都行——
+两种常见情况选一种：
 
-**每一阶段开始前，确认机器人处于对应阶段要求的物理安全状态**（见每阶段说明），不要图省事
-跳过支撑/防护直接测下一阶段。
+- **机器人自带的机载电脑**（很多 Unitree 机型自己带一台 Jetson/NUC，出厂就在同一个网络里，
+  SSH 上去跑就行，最省事）。
+- **一台用网线直连机器人网口的笔记本/台式机**——G1 通常有一个专门给二次开发用的以太网口，
+  网线插上之后这台笔记本就在机器人的局域网里了。
 
-### 阶段 0：只读遥测（不需要任何物理防护，机器人可以正常站着/被遥控器控制）
+不确定自己是哪种情况的话，先确认：机器人开机、网线插好（或者机载电脑本身就在跑）之后，能不能
+`ping` 通机器人给的默认网关/机器人本体地址——Unitree 系列机器人**通常**用
+`192.168.123.0/24` 这个网段（比如机器人本体是 `.161`、机载电脑是 `.18` 这类，具体数字按你
+机器人本体上贴的标签或者购机文档给的为准，这里说的是行业里常见的默认约定，不是保证你这台
+一定是这个），先 `ip a` 看这台机器自己在这个网段里分到的地址，能看到就说明网络通了。
+
+### 1.2 确认网络接口名字
+
+```bash
+ip a
+```
+
+找那个显示已连接、IP 地址在机器人网段里的接口（常见名字 `eth0`，也可能是 `enp0s3` 这种，
+不同发行版命名不一样），记下这个名字，下面命令里的 `--interface` 都要传这个。如果找不到任何
+接口有 IP（网线没插好、或者机载电脑网络服务没起来），先解决这个，不要往下走。
+
+### 1.3 确认机型
+
+`unitree_joint_map.py`/`real_robot_io.py` 现在只覆盖 **G1 29dof**（`unitree_hg` 消息族，
+`LowState_`/`LowCmd_` 里 29 个 `motor_state`/`motor_cmd`）——先确认你这台就是 29dof 型号
+（不是 H1/H1-2/Go2，也不是 G1 的其他关节数配置），不是的话 `UNITREE_JOINT_NAMES` 这份列表
+不能直接用，需要重新核对。
+
+### 1.4 装依赖
+
+在 1.1 选定的那台机器上：
+
+```bash
+git clone https://github.com/Mu-Yingchao/sugar_deploy.git   # 如果这台机器上还没有这个仓库
+cd sugar_deploy
+python3 -m venv .venv && source .venv/bin/activate   # 或者用你已有的 venv/conda 环境都行
+pip install -e ".[unitree]"
+```
+
+大概率会在装 `unitree_sdk2py` 这一步卡住，报类似这样的错：
+```
+Could not locate cyclonedds. Try to set CYCLONEDDS_HOME or CMAKE_PREFIX_PATH
+```
+这是因为 `unitree_sdk2py` 依赖编译好的 `cyclonedds`，pip 装不了这一层，需要先手动编译一遍
+（这台机器要有 `cmake`/`gcc` 这类基础编译工具，没有的话先 `apt install build-essential cmake`）：
+
+```bash
+cd ~
+git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x
+cd cyclonedds && mkdir build install && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=../install
+cmake --build . --target install
+export CYCLONEDDS_HOME="$HOME/cyclonedds/install"
+```
+
+`export CYCLONEDDS_HOME=...` 这一行只在当前终端会话有效，重开一个终端要重新 export 一次，
+嫌麻烦可以加进 `~/.bashrc`。编译好之后回到 `sugar_deploy` 目录重新装一次：
+
+```bash
+cd ~/sugar_deploy
+pip install -e ".[unitree]"
+```
+
+这次应该能顺利装完。装完之后验证一下（不连机器人，只确认包本身能 import）：
+
+```bash
+python -c "import unitree_sdk2py; print('unitree_sdk2py OK')"
+```
+
+### 1.5 跑只读遥测脚本
+
+确认机器人已经开机（可以是正常站立、被官方遥控器控制的状态，这一步不会干扰它）：
 
 ```bash
 python scripts/real_robot_telemetry.py --interface eth0 --duration 10
 ```
+（把 `eth0` 换成 1.2 里确认的真实接口名。）
 
-这个脚本**不发送任何指令**，物理上不可能影响机器人，可以随时跑。核对打印出来的
-`max|joint_pos-default|`（机器人如果是默认站姿附近，这个数应该是零点几弧度量级，不是几个
-弧度、也不该是明显不合理的符号）——这是在验证 `unitree_joint_map.py` 的顺序映射对不对，
-**这一步没过之前，后面所有阶段都不要做**。如果对不上，先去 `unitree_joint_map.py` 核对每个
-关节名字对应的下标，不要猜。
+**这个脚本从头到尾只订阅 `rt/lowstate`，不发布任何消息**——翻一下
+`sugar_deploy/scripts/real_robot_telemetry.py` 和它调用的
+`RealRobotIO.read_state()`（`sugar_deploy/real_robot_io.py`）就能确认这一点，这不是我口头
+保证，是可以直接读代码验证的。
+
+### 1.6 怎么看结果、下一步
+
+**如果打印出来一堆 `[telemetry] ...` 行，10 秒后正常打印"完成"退出**：
+```
+[telemetry] n=1 base_quat_wxyz=[...] max|joint_pos-default|=0.xxxrad (some_joint_name)
+```
+看 `max|joint_pos-default|` 这个数——如果机器人当时站的是接近默认站姿（不是蹲着或者摆了个
+奇怪姿势），这个数应该是零点几弧度这个量级（几度到二三十度），**不应该是好几个弧度、也不该
+是一个看起来完全不合理的关节**（比如报的是某个手腕关节差了 1.5 弧度，但你看着机器人手腕根本
+没有明显偏离默认姿态，这种情况就要怀疑映射错了）。连续跑几次、机器人摆几个不同姿态都试一下，
+每次报的"差得最多的关节"和你目视观察到的实际情况应该对得上。
+
+**核对通过**（差值量级合理、指出来的关节和实际观察吻合）→ 可以进入 `REAL_HARDWARE_DEPLOYMENT.md`
+下面"阶段 1"，但阶段 1 开始机器人会失去自身平衡辅助，**必须先把机器人挂上吊架或者放倒在软垫
+上**，这一步不能跳，见下一节详细说明。
+
+**核对不通过**（差值离谱、或者指出来的关节和实际不符）→ **不要往下做**，回到
+`sugar_deploy/unitree_joint_map.py`，把 `UNITREE_JOINT_NAMES` 这份列表和你机器人实际的
+DDS 消息定义/SDK 文档核对一遍（不同批次固件、不同购机配置有细微差异不是不可能），核对对了
+再重新跑这个脚本确认。
+
+**如果脚本报错**（比如"还没收到过 rt/lowstate 消息"）→ 见文档最后的故障排查表。
+
+## 2. 后续阶段：分阶段上机流程
+
+**每一阶段开始前，确认机器人处于对应阶段要求的物理安全状态**（见每阶段说明），不要图省事
+跳过支撑/防护直接测下一阶段。上面第 1 节就是下面的"阶段 0"，这里从阶段 1 开始往后排。
 
 ### 阶段 1：release 高层控制 + 零力矩指令
 
