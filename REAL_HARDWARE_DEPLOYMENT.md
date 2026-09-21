@@ -31,19 +31,17 @@ sim2sim 里关节顺序错了，后果是机器人在虚拟世界里瘫倒，重
 
 ### 1.1 在哪台机器上跑
 
-这一步需要在**能直接收到机器人 DDS 广播**的机器上跑，不是随便哪台能上网的电脑都行——
-两种常见情况选一种：
+**（2026-09-21 更新）部署场地 G1 旁边有一台专用的 4090 部署电脑**——这台大概率就是应该用的
+那台机器：一是要在能收到机器人 DDS 广播的网络里（下面确认一下），二是后面接 Tracker/
+Generator 之后需要 GPU 跑推理（Generator 是扩散模型，sim2sim 里我们实测过 CPU 单次采样
+120~160ms，远超 50Hz 的 20ms 预算，真机这一层大概率也需要 GPU，见 sugar_deploy 主 README
+"踩过的坑"第 5 条），4090 正好用得上。**先确认这台机器和 G1 之间的网络已经连好**（网线/
+网络配置有没有现成的，还是需要你自己接）——这个我不知道你现场具体怎么接的，需要你确认。
 
-- **机器人自带的机载电脑**（很多 Unitree 机型自己带一台 Jetson/NUC，出厂就在同一个网络里，
-  SSH 上去跑就行，最省事）。
-- **一台用网线直连机器人网口的笔记本/台式机**——G1 通常有一个专门给二次开发用的以太网口，
-  网线插上之后这台笔记本就在机器人的局域网里了。
-
-不确定自己是哪种情况的话，先确认：机器人开机、网线插好（或者机载电脑本身就在跑）之后，能不能
-`ping` 通机器人给的默认网关/机器人本体地址——Unitree 系列机器人**通常**用
-`192.168.123.0/24` 这个网段（比如机器人本体是 `.161`、机载电脑是 `.18` 这类，具体数字按你
-机器人本体上贴的标签或者购机文档给的为准，这里说的是行业里常见的默认约定，不是保证你这台
-一定是这个），先 `ip a` 看这台机器自己在这个网段里分到的地址，能看到就说明网络通了。
+确认网络通不通：机器人开机之后，在这台 4090 机器上能不能 `ping` 通机器人本体地址——Unitree
+系列机器人**通常**用 `192.168.123.0/24` 这个网段（比如机器人本体是 `.161` 这类，具体数字
+按你机器人本体上贴的标签或者购机文档给的为准，这里说的是行业里常见的默认约定，不保证你这台
+一定是这个），`ip a` 看这台 4090 机器自己在这个网段里有没有分到地址，有就说明网络通了。
 
 ### 1.2 确认网络接口名字
 
@@ -64,7 +62,7 @@ ip a
 
 ### 1.4 装依赖
 
-在 1.1 选定的那台机器上：
+在 4090 部署电脑上：
 
 ```bash
 git clone https://github.com/Mu-Yingchao/sugar_deploy.git   # 如果这台机器上还没有这个仓库
@@ -72,6 +70,11 @@ cd sugar_deploy
 python3 -m venv .venv && source .venv/bin/activate   # 或者用你已有的 venv/conda 环境都行
 pip install -e ".[unitree]"
 ```
+
+**这里先建一个新 venv 只是为了阶段 0 能尽快跑起来，不代表最终就用这个**——阶段 4 之后要接
+Tracker/Generator，需要 `sugar_rl`/`sugar_il`/`rsl_rl`（和 sim2sim 用的是同一个环境，见
+主 README 的"用法"一节），如果这台 4090 机器后续会装完整的 SUGAR 训练/推理环境，建议提前
+规划成同一个 venv（比如就叫 `sugar-venv`，跟你本机那个一致），不用到时候再合并两套环境。
 
 大概率会在装 `unitree_sdk2py` 这一步卡住，报类似这样的错：
 ```
@@ -174,16 +177,36 @@ print("零力矩指令发送正常")
 ### 阶段 2：小增益位置保持（仍然要有物理支撑）
 
 机器人挂在吊架上（脚离地或者只是轻触地面，不承重），用**远小于** `contract.JOINT_STIFFNESS`
-的增益（比如打个 5~10% 折扣都不够，建议先从个位数的 kp 开始）尝试让当前姿态保持住：
+的增益尝试让当前姿态保持住。下面这份是**能直接跑的完整代码**，不是要你自己填的伪代码——
+增益从满增益的 5% 开始（这个折扣本身是保守起点，不是量出来的"正确"值，真机 PD 特性和 sim
+不一定一样，第一次测必须从这么小开始）：
 
 ```python
+from sugar_deploy.real_robot_io import RealRobotIO
+from sugar_deploy import contract
+import numpy as np
+import time
+
+io = RealRobotIO(network_interface="eth0")
+io.release_high_level_control()
+
 state = io.read_state()
-io.send_command(q_target_contract=state.joint_pos, kp_contract=..., kd_contract=...)  # 增益自己填一个很小的数组
+q_target = state.joint_pos.copy()  # 保持当前姿态，不是走向 DEFAULT_JOINT_POS
+kp_small = np.array(contract.JOINT_STIFFNESS) * 0.05  # 满增益的 5%，保守起点
+kd_small = np.array(contract.JOINT_DAMPING) * 0.05
+
+for _ in range(250):  # 50Hz 跑 5 秒
+    io.send_command(q_target_contract=q_target, kp_contract=kp_small, kd_contract=kd_small)
+    time.sleep(0.02)
+
+io.send_zero_torque()
+print("阶段 2 测试结束，已切回零力矩")
 ```
 
 确认：指令发出去之后关节没有剧烈抖动/发散，姿态大致能保持住。**如果出现剧烈抖动，立刻停止
-发送指令**（比如 Ctrl+C，或者切回 `send_zero_torque()`），不要试图调大增益去"压住"抖动，
-先回去检查是不是哪里的增益方向/单位不对。
+发送指令**（Ctrl+C，或者手动调用 `io.send_zero_torque()`），不要试图调大增益去"压住"抖动，
+先回去检查是不是哪里的增益方向/单位不对。确认稳定之后，再考虑把 `0.05` 这个折扣逐步调大
+（比如 0.05→0.15→0.3→...），不要一次跳到满增益。
 
 ### 阶段 3：满增益默认站姿
 

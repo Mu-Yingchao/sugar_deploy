@@ -251,22 +251,31 @@ print('intrinsics:', frame.intrinsics)
 真机部署代码本身（DDS/Unitree SDK 通信层）还没写，等接的时候，感知这部分只需要：
 
 ```python
+# ⚠️ 这段是结构示例，不是能直接复制运行的代码——下面标了 TODO 的几处，必须先做完 6.3/6.4
+# 节的真机标定，拿到真实数字填进去，不能直接照抄这段跑（tag_size_m 的 0.10 也只是占位，
+# 换成你 6.1 节实际量出来的黑框边长）。
+import numpy as np
 from sugar_deploy.camera_source import RealSenseCameraSource
 from sugar_deploy.object_state import AprilTagObjectSource, TagObjectOffset
 
 camera_source = RealSenseCameraSource()
 tag_offsets = [
-    TagObjectOffset(tag_id=0, pos_offset=..., rot_offset=...),  # 6.4 节标定出来的
-    # ...
+    TagObjectOffset(
+        tag_id=0,
+        pos_offset=np.array([0.0, 0.0, 0.0]),  # TODO: 6.4 节标定出来的真实值，别用这个占位
+        rot_offset=np.eye(3),                   # TODO: 同上
+    ),
+    # 贴了几个面就加几条
 ]
 object_source = AprilTagObjectSource(
-    camera_source, tag_size_m=0.10,  # 6.1 节量出来的实际黑框边长
+    camera_source, tag_size_m=0.10,  # TODO: 6.1 节量出来的实际黑框边长，替换这个占位值
     tag_offsets=tag_offsets,
-    max_stale_frames=...,  # 按真实控制频率和能接受的盲区时长定，不要直接抄 sim demo 的 200
+    max_stale_frames=150,  # TODO: 按真实控制频率和能接受的盲区时长定，这只是一个起点建议
 )
 
 # 每个控制步（或者按检测能跟上的频率，见下面 6.6）：
-cam_pos_torso, cam_rot_torso = ...  # 6.3 节标定出来的固定外参（常量，不随时间变）
+cam_pos_torso = np.array([0.0, 0.0, 0.0])  # TODO: 6.3 节标定出来的固定外参（常量，不随时间变）
+cam_rot_torso = np.eye(3)                   # TODO: 同上
 object_source.set_camera_pose_w(cam_pos_torso, cam_rot_torso)
 object_source.update()
 # 主循环的 robot.anchor_pos_w / anchor_quat_w 按第 2 节的约定固定填 (0,0,0) / identity
