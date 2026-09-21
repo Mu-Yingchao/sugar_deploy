@@ -43,11 +43,11 @@ sim2sim / 真机部署代码。和 SUGAR 训练仓库分开放（原因见下）
 
 | 契约 | 来源 |
 |---|---|
-| 29 关节顺序 | `descriptions/robots/g1/g1_29dof_rev_1_0_with_rubber_hand.urdf` 的 `<joint>` 声明顺序 |
+| 29 关节顺序 | ~~`descriptions/robots/g1/g1_29dof_rev_1_0_with_rubber_hand.urdf` 的 `<joint>` 声明顺序~~——**这一条来源后来证明是错的**，真正可信的来源是官方 `inference.sh`（非 headless）日志里 `Resolved joint names for the action term JointPositionAction` 那一行（IsaacLab 运行时实测），见"踩过的坑"第 4 条，这里保留删除线是为了提醒"静态分析出来的契约不可信"这个教训本身 |
 | PD 增益/action_scale | `source/sugar_rl/sugar_rl/assets/robots/unitree.py`（`ImplicitActuatorCfg` + `0.25*effort/stiffness` 公式） |
 | Tracker 510 维观测组成 | `base_inference_env_cfg.py` 的 `TrackerCfg` observation group，逐项核对，历史长度 5 |
 | Command 36 维结构 | `sugar_il/wrapper/sugar_il_wrapper.py:250-262` 的 `_parse_action` 注释 |
-| anchor=torso_link（不是 pelvis） | `commands.py:1658-1663` |
+| obj 观测用 anchor=torso_link，**不是论文里说的"root frame"** | `commands.py:170`（`anchor_body_name` 读自 cfg）+ `commands.py:499`（`# Object pose in the anchor frame` 注释，实际用 `robot_anchor_pos_w`/`quat_w` 而不是 `robot_base_pos_w`/`quat_w`，两者是代码里明确区分开的不同属性，`robot_base_*` 才是 IsaacLab articulation 真正的 root/pelvis，见 `commands.py:1666-1670`）+ 三处任务配置（`train_refiner`/`train_tracker`/`inference` 各自的 `base_*_env_cfg.py`）都写死 `anchor_body_name="torso_link"`。论文原文说 $o_t^O$ 是"相对 root frame"，但代码注释和变量命名明确用的是"anchor"这个概念，值是 torso_link 不是 pelvis——这大概率是论文行文时的不严谨表述，代码是精确的，`sugar_deploy` 跟的是代码 |
 | Generator 调用频率（每 20 步一次） | `base_inference_env_cfg.py:156` + `commands.py:1290-1301` |
 | Generator 的真实推理路径 | `commands.py:47,351` 直接 import `sugar_il.wrapper.sugar_il_wrapper.GeneratorWrapper`——这是 `play.py`/`inference.sh` 实际在用的代码，不是训练 yaml 里写的默认配置（两者不一样，见下面踩坑记录） |
 
@@ -88,8 +88,8 @@ python scripts/run_sim2sim.py --task CarryBox \
     --control-steps 1000
 ```
 
-拿我们自己训出来的 checkpoint 跑（等服务器上对应任务训完 Tracker + Generator 之后，`ckpts/` 目录
-会出现和 `demo_ckpts/<Task>/` 一样命名的 `tracker.pt` + `generator.ckpt`）：
+拿我们自己训出来的 checkpoint 跑（六个任务已经全部训完，见下方说明，`ckpts/` 目录下有和
+`demo_ckpts/<Task>/` 一样命名的 `tracker.pt` + `generator.ckpt`）：
 
 ```bash
 python scripts/run_sim2sim.py --task CarryBox \
@@ -97,7 +97,7 @@ python scripts/run_sim2sim.py --task CarryBox \
     --generator-checkpoint /data0/SUGAR_repro/SUGAR/outputs/CarryBox_server_repro/ckpts/generator.ckpt
 ```
 
-**（2026-09-20 更新）六个任务已经全部训完**——SSH 到服务器确认过，`CarryBox/PushBox/
+**（2026-09-20 确认）六个任务已经全部训完**——SSH 到服务器确认过，`CarryBox/PushBox/
 KickBox/PickBottle/StandBottle/SitChair` 的 `ckpts/` 目录现在都有完整的
 `refiner.pt`+`tracker.pt`+`generator.ckpt`，GPU 全部空闲，没有任务还在跑。上面这条命令
 现在对所有任务都能跑，把 `--task` 和路径里的任务名换成想跑的那个就行。

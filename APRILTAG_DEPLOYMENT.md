@@ -48,6 +48,15 @@ AprilTag 方案——这份文档记录的是我们自己在 `sugar_deploy` 里�
 
 ## 2. 参考系怎么选（真机部署前必须想清楚的一件事）
 
+**先澄清一个容易搞混的地方**：SUGAR 论文原文说 $o_t^O$ 是物体相对机器人 **"root frame"**
+的位姿，但训练代码（`commands.py:499` 的注释、`anchor_body_name` 这个变量名本身、以及三处
+任务配置文件都写死的 `anchor_body_name="torso_link"`）用的是 **"anchor frame"** 这个概念，
+实际值是 `torso_link`，不是 IsaacLab articulation 真正的 root（那是 `robot_base_pos_w`/
+`robot_base_quat_w`，取自 `root_pos_w`/`root_quat_w`，对应 pelvis，`commands.py:1666-1670`
+能看到两者是代码里明确区分开的两个不同属性）。这大概率是论文行文时的不严谨表述——`
+sugar_deploy` 跟的是训练代码实际用的 torso_link，不是论文字面上的"root"，因为训好的
+checkpoint 是照 torso_link 这个参考系训的，用错参考系观测会系统性偏离训练分布。
+
 `observation.py` 里物体相对机器人的观测，用的是
 `subtract_frame_transform(robot.anchor_pos_w, robot.anchor_quat_w, obj_pos_w, obj_quat_w)`——
 这一步只做**减法**，`anchor_pos_w`（torso_link 位置）的绝对值从来没被单独使用过，全链路只
