@@ -97,7 +97,21 @@ class RobotState:
 
 
 class HistoryBuffer:
-    """固定长度、旧->新的滑动窗口，对齐 IsaacLab CircularBuffer 的 flatten 顺序。"""
+    """固定长度、旧->新的滑动窗口，对齐 IsaacLab CircularBuffer 的语义和 flatten 顺序。
+
+    **reset 之后的第一次 push 会把整个缓冲区填满这一帧**，不是"4 帧零 + 1 帧真实数据"——
+    这是刻意对齐 IsaacLab ``CircularBuffer.append()`` 里的这段逻辑（
+    ``isaaclab/utils/buffers/circular_buffer.py``）：
+
+        # Check for batches with zero pushes and initialize all values in batch to first append
+        is_first_push = self._num_pushes == 0
+        if torch.any(is_first_push):
+            self._buffer[:, is_first_push] = data[is_first_push]
+
+    2026-09-23 真机部署时发现这里原来的实现是错的（reset 填零 + 只 push 一帧，得到
+    [0,0,0,0,x]），意味着每次 reset 之后的前 4 个控制步，Tracker 吃到的历史观测里混着
+    训练时不会出现的零值——**这个 bug 同时影响 sim2sim 和真机**，不只是真机路径。
+    """
 
     def __init__(self, dim: int, length: int):
         self.dim = dim
@@ -105,9 +119,16 @@ class HistoryBuffer:
         self._buf: deque[np.ndarray] = deque(
             [np.zeros(dim, dtype=np.float32) for _ in range(length)], maxlen=length
         )
+        self._num_pushes = 0
 
     def push(self, x: np.ndarray) -> None:
-        self._buf.append(np.asarray(x, dtype=np.float32))
+        data = np.asarray(x, dtype=np.float32)
+        if self._num_pushes == 0:
+            # 首帧填满整个窗口，语义同 IsaacLab CircularBuffer（见类文档字符串）
+            self._buf = deque([data.copy() for _ in range(self.length)], maxlen=self.length)
+        else:
+            self._buf.append(data)
+        self._num_pushes += 1
 
     def flatten(self) -> np.ndarray:
         return np.concatenate(list(self._buf), axis=0)
@@ -115,6 +136,8 @@ class HistoryBuffer:
     def reset(self, x: np.ndarray | None = None) -> None:
         fill = np.zeros(self.dim, dtype=np.float32) if x is None else np.asarray(x, dtype=np.float32)
         self._buf = deque([fill.copy() for _ in range(self.length)], maxlen=self.length)
+        # 传了显式初值就当成"已经有过一帧"，没传（清零）则等下一次 push 来填满整个窗口
+        self._num_pushes = 1 if x is not None else 0
 
 
 @dataclass

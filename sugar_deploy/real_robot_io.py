@@ -22,11 +22,12 @@ import numpy as np
 from sugar_deploy import contract
 from sugar_deploy.unitree_joint_map import UNITREE_JOINT_NAMES, contract_to_unitree, unitree_to_contract
 
-# Unitree SDK 的标准哨兵值：q/dq 设成这两个值、同时 kp=kd=0，表示"这个关节这一步不给主动
-# 控制指令"，不是随便选的数字，是电机固件识别的特殊标记——来源同上（HDMI 部署仓库
-# utils/common.py 的 UNITREE_LEGGED_CONST，和 Unitree 官方 SDK 例程一致）。
-POS_STOP_F = 2146000000.0
-VEL_STOP_F = 16000.0
+# ⚠️ 这两个哨兵值属于 **unitree_go** 消息族（Go2/H1），**G1 的 unitree_hg 不适用**——
+# 2026-09-23 真机实测：给 HG 发 q=POS_STOP_F/dq=VEL_STOP_F 之后机器人并没有卸力，
+# 详见 send_zero_torque() 的文档字符串。保留这两个常量只是为了记录这段历史，
+# **本模块内部已经不再使用它们**，新代码也不要用。
+_LEGACY_GO_POS_STOP_F = 2146000000.0
+_LEGACY_GO_VEL_STOP_F = 16000.0
 LOWLEVEL_FLAG = 0xFF
 
 
@@ -68,10 +69,12 @@ class RealRobotIO:
         self._low_cmd = unitree_hg_msg_dds__LowCmd_()
         self._low_cmd.mode_pr = 0
         self._low_cmd.mode_machine = 0  # 第一次 read_state() 之后会用真实值覆盖，见下面
+        # 模板初始化成全零（理由同 send_zero_torque 的文档字符串：HG 不吃 go 族的哨兵值）。
+        # 这样即使某条路径漏了字段没赋值，残留的也是"不发力"而不是一个非法值。
         for cmd in self._low_cmd.motor_cmd:
             cmd.mode = 1
-            cmd.q = POS_STOP_F
-            cmd.dq = VEL_STOP_F
+            cmd.q = 0.0
+            cmd.dq = 0.0
             cmd.kp = 0.0
             cmd.kd = 0.0
             cmd.tau = 0.0
@@ -169,13 +172,28 @@ class RealRobotIO:
         self._low_cmd_pub.Write(self._low_cmd)
 
     def send_zero_torque(self) -> None:
-        """发一次"不主动控制"的指令（q=PosStopF, kp=kd=0）——用来在 release 高层控制之后、
-        真正开始位置控制之前，先确认发布通道本身工作正常，且不会给任何关节实际力矩。"""
+        """发一次"不主动控制"的指令：**所有字段全零**（``mode=1, q=dq=kp=kd=tau=0``），
+        覆盖 ``motor_cmd`` 数组的全部槽位（G1 的 HG 消息是 35 个槽位，比实际用到的 29 个
+        关节多，多出来的也一并清零，不留未初始化的残值）。
+
+        **（2026-09-23 真机实测修正，这是一个真实的安全 bug）**：这里原来发的是
+        ``q=POS_STOP_F, dq=VEL_STOP_F``（2146000000.0 / 16000.0）。那两个哨兵值来自
+        ``unitree_go`` 消息族（Go2/H1 用的），**不适用于 G1 的 ``unitree_hg`` 消息族**——
+        真机上实测的现象是：发完之后机器人并没有卸力，仍然有较强的保持力。合理的解释是
+        固件把这种超出正常范围的取值当成非法指令直接拒收了，于是电机继续执行**上一条**
+        有效指令（也就是保持原来的位置控制），这比"卸力失败"更危险，因为程序这边看起来
+        一切正常、日志也没有报错。改成全零之后，真机实测确认卸力生效。
+
+        教训和关节顺序那个坑是同一类：**"参考实现里是这么写的"不等于"在我们这个机型/消息
+        族上是对的"**——HDMI 的 ``real_bridge.py`` 里确实用了 PosStopF，但那是它初始化
+        模板时的通用写法（对 go/hg 两族都用同一段代码），并不是被验证过的 HG 卸力指令。
+        """
         if not self._released_high_level:
             raise RuntimeError("还没调用 release_high_level_control()")
         for cmd in self._low_cmd.motor_cmd:
-            cmd.q = POS_STOP_F
-            cmd.dq = VEL_STOP_F
+            cmd.mode = 1
+            cmd.q = 0.0
+            cmd.dq = 0.0
             cmd.kp = 0.0
             cmd.kd = 0.0
             cmd.tau = 0.0
