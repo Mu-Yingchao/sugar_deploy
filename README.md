@@ -6,6 +6,8 @@ sim2sim / 真机部署代码。和 SUGAR 训练仓库分开放（原因见下）
 相关文档：
 - [`APRILTAG_DEPLOYMENT.md`](./APRILTAG_DEPLOYMENT.md)：AprilTag 物体感知方案（原理、sim 内验证结果、真机标定步骤、已知限制）
 - [`REAL_HARDWARE_DEPLOYMENT.md`](./REAL_HARDWARE_DEPLOYMENT.md)：真机 DDS 通信层 + 分阶段上机安全测试流程
+- [`STAGE3_SUMMARY_AND_STAGE4_PLAN.md`](./STAGE3_SUMMARY_AND_STAGE4_PLAN.md)：真机阶段 0~3 实测结果、
+  已知边界与阶段 4 计划（部署机现场记录，**含尚未进版本库的代码/数据清单**）
 
 ## 为什么单独一个仓库，不塞进 SUGAR 训练仓库
 
