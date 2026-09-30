@@ -4,6 +4,7 @@
 sim2sim / 真机部署代码。和 SUGAR 训练仓库分开放（原因见下），不依赖 IsaacSim/IsaacLab 跑起来。
 
 相关文档：
+- 👉 [`HANDOFF.md`](./HANDOFF.md)：**新接手这个项目从这里开始**——现状、下一步、必须先知道的安全事项和已踩过的坑
 - [`APRILTAG_DEPLOYMENT.md`](./APRILTAG_DEPLOYMENT.md)：AprilTag 物体感知方案（原理、sim 内验证结果、真机标定步骤、已知限制）
 - [`REAL_HARDWARE_DEPLOYMENT.md`](./REAL_HARDWARE_DEPLOYMENT.md)：真机 DDS 通信层 + 分阶段上机安全测试流程
 - [`STAGE3_SUMMARY_AND_STAGE4_PLAN.md`](./STAGE3_SUMMARY_AND_STAGE4_PLAN.md)：真机阶段 0~3 实测结果、
