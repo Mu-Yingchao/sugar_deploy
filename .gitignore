@@ -6,3 +6,7 @@ build/
 dist/
 *.mp4
 MUJOCO_LOG.TXT
+diagnostics/*.csv
+
+# 部署机传过来的代码压缩包，不入库（3.3GB，含 .venv）
+*.zip

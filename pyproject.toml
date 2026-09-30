@@ -27,6 +27,22 @@ realsense = [
 unitree = [
     "unitree_sdk2py @ git+https://github.com/unitreerobotics/unitree_sdk2_python.git",
 ]
+# 只运行 Tracker（不加载 Generator/Isaac Sim）所需的最小推理依赖。版本必须与 SUGAR 官方
+# 指定的 IsaacLab v2.3.0 一致；2.3.x 的 ActorCritic 构造 API 不兼容。
+tracker = [
+    "rsl-rl-lib==3.0.1",
+]
+# 直接加载 SUGAR 官方 generator.ckpt 的最小推理依赖；不包含训练、数据集处理和 xformers。
+generator = [
+    "dill",
+    "omegaconf",
+    "diffusers==0.32.1",
+    "einops",
+    "timm==1.0.12",
+    "scipy",
+    "zarr==2.12.0",
+    "numcodecs==0.12.1",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]

@@ -5,18 +5,6 @@
 
 关联文档：[真机部署流程](REAL_HARDWARE_DEPLOYMENT.md)、[AprilTag 部署方案](APRILTAG_DEPLOYMENT.md)。
 
-> **⚠️ 本文提到的部分代码和全部诊断 CSV 还没有进版本库**（截至 2026-09-29 核对）。
-> `real_robot_safety.py`、`real_robot_tracker.py`、`scripts/real_robot_*.py` 这几个脚本，
-> 以及 `diagnostics/` 下的实测数据，**目前只存在于部署电脑本地**，GitHub 远端没有。
-> 第 6 节里指向这些文件的链接现在点不开，不是路径写错了，是文件还没推上来。
-> 这些内容包含本项目最安全攸关的急停实现和唯一一份真机实测数据，**单点存储、无备份**，
-> 建议尽快从部署机 push。
->
-> 推送时注意会有冲突：`sugar_deploy/real_robot_io.py`（HG 零力矩格式）和
-> `sugar_deploy/observation.py`（历史缓冲区首帧填充）这两个文件，本仓库在 `f74dd1a` 里
-> 按相同结论也各自改过一遍。合并时**优先采用部署机那版经过真机验证的实现**——本仓库这版
-> 只在仿真里验证过，没上过真机。
-
 ## 1. 当前结论与工作切换
 
 **阶段 3.1～3.3 已在所记录的条件下完成；3.4 独立站立尚未完成。现在暂时转入阶段 4 的相机、
@@ -193,9 +181,6 @@ command 的路径，不能把这段初始化称为已根据实时真机姿态规
 以下 CSV 已在本次整理时确认存在；数据行不包含表头。早期急停及阶段 3 验收的部分数字来自
 部署记录和现场反馈，没有在这里另行声称找到了逐周期原始文件。
 
-**这些文件全部只在部署电脑上**（`diagnostics/` 被 gitignore，且尚未单独备份），下面的链接
-在 GitHub 上点不开，见文首提示。
-
 | 文件 | 数据行数 | 用途 |
 |---|---:|---|
 | [baseline_20260922_175242.csv](diagnostics/baseline_20260922_175242.csv) | 991 | 无 Tracker 默认姿态基线 |
@@ -205,14 +190,14 @@ command 的路径，不能把这段初始化称为已根据实时真机姿态规
 | [generator_tracker_shadow_20260922_211715.csv](diagnostics/generator_tracker_shadow_20260922_211715.csv) | 20 | 1% 力矩混合 |
 | [generator_tracker_shadow_20260922_212854.csv](diagnostics/generator_tracker_shadow_20260922_212854.csv) | 0 | 2% 前置拒绝，仅表头；不是采到 2% 运动 |
 
-主要实现（🔴 = 仅在部署机本地，尚未进版本库，链接暂时点不开；✅ = 仓库里有）：
+主要实现：
 
-- 🔴 [增益与姿态测试](scripts/real_robot_gain_test.py)、🔴 [基线诊断](scripts/real_robot_baseline_diagnostic.py)。
-- 🔴 [安全控制器](sugar_deploy/real_robot_safety.py)、✅ [DDS/HG 命令](sugar_deploy/real_robot_io.py)。
-- 🔴 [策略力矩限幅与混合](sugar_deploy/real_robot_tracker.py)、✅ [观测历史](sugar_deploy/observation.py)。
-- 🔴 [联合影子/混合实验](scripts/real_robot_generator_tracker_shadow_test.py)：仍含虚拟箱子输入。
-- 🔴 [只读相机探针](scripts/real_robot_camera_probe.py)、✅ [相机源](sugar_deploy/camera_source.py)、
-  ✅ [AprilTag 物体源](sugar_deploy/object_state.py)。
+- [增益与姿态测试](scripts/real_robot_gain_test.py)、[基线诊断](scripts/real_robot_baseline_diagnostic.py)。
+- [安全控制器](sugar_deploy/real_robot_safety.py)、[DDS/HG 命令](sugar_deploy/real_robot_io.py)。
+- [策略力矩限幅与混合](sugar_deploy/real_robot_tracker.py)、[观测历史](sugar_deploy/observation.py)。
+- [联合影子/混合实验](scripts/real_robot_generator_tracker_shadow_test.py)：仍含虚拟箱子输入。
+- [只读相机探针](scripts/real_robot_camera_probe.py)、[相机源](sugar_deploy/camera_source.py)、
+  [AprilTag 物体源](sugar_deploy/object_state.py)。
 
 上一轮验证中 18 项现有单元测试通过；相机探针通过编译与参数帮助检查，尚未通过真实相机取帧。
 日志位于被忽略的 diagnostics 目录，交接或备份时应单独带上，不能只依赖 Git 提交。

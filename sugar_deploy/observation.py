@@ -97,21 +97,7 @@ class RobotState:
 
 
 class HistoryBuffer:
-    """固定长度、旧->新的滑动窗口，对齐 IsaacLab CircularBuffer 的语义和 flatten 顺序。
-
-    **reset 之后的第一次 push 会把整个缓冲区填满这一帧**，不是"4 帧零 + 1 帧真实数据"——
-    这是刻意对齐 IsaacLab ``CircularBuffer.append()`` 里的这段逻辑（
-    ``isaaclab/utils/buffers/circular_buffer.py``）：
-
-        # Check for batches with zero pushes and initialize all values in batch to first append
-        is_first_push = self._num_pushes == 0
-        if torch.any(is_first_push):
-            self._buffer[:, is_first_push] = data[is_first_push]
-
-    2026-09-23 真机部署时发现这里原来的实现是错的（reset 填零 + 只 push 一帧，得到
-    [0,0,0,0,x]），意味着每次 reset 之后的前 4 个控制步，Tracker 吃到的历史观测里混着
-    训练时不会出现的零值——**这个 bug 同时影响 sim2sim 和真机**，不只是真机路径。
-    """
+    """固定长度、旧->新的滑动窗口，对齐 IsaacLab CircularBuffer 的 flatten 顺序。"""
 
     def __init__(self, dim: int, length: int):
         self.dim = dim
@@ -119,16 +105,9 @@ class HistoryBuffer:
         self._buf: deque[np.ndarray] = deque(
             [np.zeros(dim, dtype=np.float32) for _ in range(length)], maxlen=length
         )
-        self._num_pushes = 0
 
     def push(self, x: np.ndarray) -> None:
-        data = np.asarray(x, dtype=np.float32)
-        if self._num_pushes == 0:
-            # 首帧填满整个窗口，语义同 IsaacLab CircularBuffer（见类文档字符串）
-            self._buf = deque([data.copy() for _ in range(self.length)], maxlen=self.length)
-        else:
-            self._buf.append(data)
-        self._num_pushes += 1
+        self._buf.append(np.asarray(x, dtype=np.float32))
 
     def flatten(self) -> np.ndarray:
         return np.concatenate(list(self._buf), axis=0)
@@ -136,8 +115,6 @@ class HistoryBuffer:
     def reset(self, x: np.ndarray | None = None) -> None:
         fill = np.zeros(self.dim, dtype=np.float32) if x is None else np.asarray(x, dtype=np.float32)
         self._buf = deque([fill.copy() for _ in range(self.length)], maxlen=self.length)
-        # 传了显式初值就当成"已经有过一帧"，没传（清零）则等下一次 push 来填满整个窗口
-        self._num_pushes = 1 if x is not None else 0
 
 
 @dataclass
@@ -158,13 +135,17 @@ class TrackerObsBuilder:
     last_action: np.ndarray = field(default_factory=lambda: np.zeros(contract.NUM_JOINTS, dtype=np.float32))
 
     def reset(self, robot: RobotState) -> None:
-        self.base_ang_vel_hist.reset()
-        self.joint_pos_hist.reset()
-        self.joint_vel_hist.reset()
-        self.action_hist.reset()
-        self.gravity_hist.reset()
+        # IsaacLab 2.3.0 CircularBuffer 的第一次 append 会把首帧复制到整个 history，
+        # 而不是留下 history_length-1 帧零值。这里必须精确复现；尤其不能把前四帧
+        # project_gravity 设成 0，否则策略启动观测会落在训练分布之外。
+        base_ang_vel_b = quat_apply_inverse(robot.base_quat_w, robot.base_ang_vel_w)
+        gravity_b = quat_apply_inverse(robot.base_quat_w, GRAVITY_W)
+        self.base_ang_vel_hist.reset(base_ang_vel_b)
+        self.joint_pos_hist.reset(robot.joint_pos - self.default_joint_pos)
+        self.joint_vel_hist.reset(robot.joint_vel)
+        self.action_hist.reset(np.zeros(contract.NUM_JOINTS, dtype=np.float32))
+        self.gravity_hist.reset(gravity_b)
         self.last_action[:] = 0.0
-        self._push_frame(robot)
 
     def _push_frame(self, robot: RobotState) -> None:
         base_ang_vel_b = quat_apply_inverse(robot.base_quat_w, robot.base_ang_vel_w)
